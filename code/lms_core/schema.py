@@ -4,14 +4,16 @@ from datetime import datetime
 from pydantic import EmailStr, field_validator
 from datetime import date
 
-
-from django.contrib.auth.models import User
-
 class UserOut(Schema):
     id: int
     email: str
     first_name: str
     last_name: str
+    tempat_lahir: str
+    tanggal_lahir: date
+    alamat: str
+    no_hp: str
+
 
 
 class CourseSchemaOut(Schema):
@@ -37,6 +39,7 @@ class CourseSchemaIn(Schema):
     name: str
     description: str
     price: int
+    max_students: Optional[int]
 
 
 class CourseContentMini(Schema):
@@ -45,10 +48,19 @@ class CourseContentMini(Schema):
     description: str
     course_id: CourseSchemaOut
     scheduled_release: Optional[datetime]
+    scheduled_close: Optional[datetime]
     created_at: datetime
     updated_at: datetime
 
 
+class CourseContentIn(Schema):
+    name: str
+    description: str
+    content_type: str  # video, pdf, quiz, dll
+    video_url: Optional[str] = None
+    file_attachment: Optional[str] = None
+    scheduled_release: Optional[datetime] = None
+    scheduled_close: Optional[datetime] = None
 class CourseContentFull(Schema):
     id: int
     name: str
@@ -57,6 +69,7 @@ class CourseContentFull(Schema):
     file_attachment: Optional[str]
     course_id: CourseSchemaOut
     scheduled_release: Optional[datetime]
+    scheduled_close: Optional[datetime]
     created_at: datetime
     updated_at: datetime
 
@@ -112,3 +125,21 @@ class CertificateData(Schema):
     course_name: str
     completion_date: str
 
+class UserProfileOut(Schema):
+    id: int
+    email: str
+    first_name: str
+    last_name: str
+    no_hp: str
+    deskripsi: Optional[str] = None
+    foto_profil: Optional[str] = None
+    enrolled_courses: List[CourseSchemaOut]
+    taught_courses: List[CourseSchemaOut]
+
+class UserProfileUpdate(Schema):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    no_hp: Optional[str] = None
+    deskripsi: Optional[str] = None
+    foto_profil: Optional[str] = None 

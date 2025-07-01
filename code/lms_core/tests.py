@@ -1,10 +1,11 @@
 from django.test import TestCase
 from django.urls import reverse
-from django.contrib.auth.models import User
+# from django.contrib.auth.models import User
 from lms_core.utils import calculate_discount, validate_password, calculator
 from ninja_extra.testing import TestAsyncClient
 from ninja.testing import TestClient
 from lms_core.models import Course, CourseMember, CourseContent, Comment
+from lms_core.models import CourseCompletion, ContentCompletion, User
 from lms_core.schema import EnrollStudentBatch
 from lms_core.api import apiv1
 import json
@@ -439,6 +440,24 @@ class UserActivityDashboardTest(TestCase):
             headers={"Authorization": f"Bearer {self.admin_token}"}
         )
         self.assertEqual(response.status_code, 404)
+    
+    def test_success_admin_view(self):
+        # Buat beberapa penyelesaian konten
+        ContentCompletion.objects.create(user=self.user, content=self.content)
+        ContentCompletion.objects.create(user=self.user, content=self.content)
+        
+        content2 = CourseContent.objects.create(
+            name="Konten 2", description="Deskripsi", course_id=self.course
+        )
+        ContentCompletion.objects.create(user=self.user, content=content2)
+        
+        response = self.client.get(
+            f"/dashboard?user_id={self.user.id}",
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['completed_content_count'], 2)
 
 class CourseAnalyticsTest(TestCase):
     def setUp(self):
@@ -619,6 +638,43 @@ class ContentSchedulingTest(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("belum dirilis", response.json()["detail"])
     
+    def test_closed_content_access(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Konten yang sudah tutup
+        closed_content = CourseContent.objects.create(
+            name="Konten Sudah Tutup",
+            course_id=self.course,
+            scheduled_release=timezone.now() - timedelta(days=2),
+            scheduled_close=timezone.now() - timedelta(days=1)
+        )
+        
+        # Konten yang belum tutup
+        open_content = CourseContent.objects.create(
+            name="Konten Masih Terbuka",
+            course_id=self.course,
+            scheduled_release=timezone.now() - timedelta(days=1),
+            scheduled_close=timezone.now() + timedelta(days=1)
+        )
+        
+        response = self.client.get(
+            f"/courses/{self.course.id}/contents",
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        contents = response.json()
+        
+        # Hanya konten yang masih terbuka yang muncul
+        self.assertEqual(len(contents), 1)
+        self.assertEqual(contents[0]['name'], "Konten Masih Terbuka")
+        
+        # Coba akses konten yang sudah tutup
+        response = self.client.get(
+            f"/contents/{closed_content.id}/comments",
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 403)
+                         
     def test_content_without_schedule(self):
         # Konten tanpa jadwal rilis
         content = CourseContent.objects.create(
@@ -634,3 +690,376 @@ class ContentSchedulingTest(TestCase):
         contents = response.json()
         self.assertEqual(response.status_code, 200)
         self.assertTrue(any(c['name'] == "Konten Tanpa Jadwal" for c in contents))
+
+class CertificateTest(TestCase):
+    def setUp(self):
+        self.client = TestClient(apiv1)
+        self.teacher = User.objects.create_user(
+            username='guru', email='guru@sekolah.id', password='password',
+            first_name='John', last_name='Doe'
+        )
+        self.student = User.objects.create_user(
+            username='siswa', email='siswa@sekolah.id', password='password',
+            first_name='Jane', last_name='Smith'
+        )
+        
+        # Buat course
+        self.course = Course.objects.create(
+            name="Matematika Lanjutan", description="Aljabar", price=0, teacher=self.teacher
+        )
+        
+        # Enroll student
+        CourseMember.objects.create(
+            course_id=self.course, user_id=self.student, roles='std'
+        )
+        
+        # Token untuk student
+        token_res = self.client.post(
+            "/api/auth/token/pair",
+            json={"username": "siswa", "password": "password"}
+        )
+        self.student_token = token_res.json()["access"]
+    
+    def test_mark_course_complete(self):
+        # Tandai kursus selesai
+        response = self.client.post(
+            f"/courses/{self.course.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(CourseCompletion.objects.filter(user=self.student, course=self.course).exists())
+    
+    def test_view_certificate_success(self):
+        # Tandai kursus selesai dulu
+        CourseCompletion.objects.create(user=self.student, course=self.course)
+        
+        response = self.client.get(
+            f"/certificates/{self.course.id}",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"SERTIFIKAT KELULUSAN", response.content)
+        self.assertIn(b"Jane Smith", response.content)
+        self.assertIn(b"Matematika Lanjutan", response.content)
+    
+    def test_download_certificate_success(self):
+        # Tandai kursus selesai dulu
+        CourseCompletion.objects.create(user=self.student, course=self.course)
+        
+        response = self.client.get(
+            f"/certificates/{self.course.id}/pdf",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertTrue(response['Content-Disposition'].startswith('attachment'))
+        self.assertIn(b'PDF', response.content)  # Cek signature file PDF
+    
+    def test_certificate_access_denied(self):
+        # Buat user lain
+        other_user = User.objects.create_user(
+            username='user2', email='user2@sekolah.id', password='password'
+        )
+        token_res = self.client.post(
+            "/api/auth/token/pair",
+            json={"username": "user2", "password": "password"}
+        )
+        other_token = token_res.json()["access"]
+        
+        # Tandai kursus selesai oleh student pertama
+        CourseCompletion.objects.create(user=self.student, course=self.course)
+        
+        # User lain mencoba akses sertifikat
+        response = self.client.get(
+            f"/certificates/{self.course.id}",
+            headers={"Authorization": f"Bearer {other_token}"}
+        )
+        self.assertEqual(response.status_code, 404)
+    
+    def test_certificate_not_completed(self):
+        # Akses sertifikat tanpa menyelesaikan kursus
+        response = self.client.get(
+            f"/certificates/{self.course.id}",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 404)
+    
+    def test_throttling(self):
+        # Tandai kursus selesai dulu
+        CourseCompletion.objects.create(user=self.student, course=self.course)
+        
+        responses = []
+        for _ in range(6):  # 5 request allowed + 1 extra
+            res = self.client.get(
+                f"/certificates/{self.course.id}",
+                headers={"Authorization": f"Bearer {self.student_token}"}
+            )
+            responses.append(res.status_code)
+        
+        # Request ke-6 harus kena throttle
+        self.assertEqual(responses[5], 429)
+        self.assertIn("Terlalu banyak", responses[5].json()["detail"])
+
+class ProfileTest(TestCase):
+    def setUp(self):
+        self.client = TestClient(apiv1)
+        self.user = User.objects.create_user(
+            username='user@sekolah.id',
+            email='user@sekolah.id',
+            password='password',
+            first_name='John',
+            last_name='Doe',
+            no_hp='081234567890',
+            deskripsi='Deskripsi awal'
+        )
+        self.other_user = User.objects.create_user(
+            username='other@sekolah.id',
+            email='other@sekolah.id',
+            password='password'
+        )
+        
+        # Buat kursus untuk testing
+        self.course1 = Course.objects.create(
+            name="Kursus 1", description="Deskripsi", price=0, teacher=self.user
+        )
+        self.course2 = Course.objects.create(
+            name="Kursus 2", description="Deskripsi", price=0, teacher=self.other_user
+        )
+        
+        # Enroll user ke kursus
+        CourseMember.objects.create(
+            course_id=self.course2,
+            user_id=self.user,
+            roles='std'
+        )
+        
+        # Token untuk user
+        token_res = self.client.post(
+            "/api/auth/token/pair",
+            json={"username": "user@sekolah.id", "password": "password"}
+        )
+        self.token = token_res.json()["access"]
+    
+    # TEST SHOW PROFILE
+    def test_show_profile_success(self):
+        response = self.client.get(
+            f"/profile/{self.user.id}",
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['first_name'], 'John')
+        self.assertEqual(data['last_name'], 'Doe')
+        self.assertEqual(data['no_hp'], '081234567890')
+        self.assertEqual(data['deskripsi'], 'Deskripsi awal')
+        self.assertEqual(len(data['taught_courses']), 1)
+        self.assertEqual(len(data['enrolled_courses']), 1)
+    
+    def test_show_profile_not_found(self):
+        response = self.client.get(
+            "/profile/999",
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 404)
+    
+    # TEST EDIT PROFILE
+    def test_edit_profile_success(self):
+        payload = {
+            "first_name": "Jane",
+            "last_name": "Smith",
+            "email": "newemail@sekolah.id",
+            "no_hp": "089876543210",
+            "deskripsi": "Deskripsi baru"
+        }
+        response = self.client.patch(
+            "/profile",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['first_name'], 'Jane')
+        self.assertEqual(data['last_name'], 'Smith')
+        self.assertEqual(data['email'], 'newemail@sekolah.id')
+        self.assertEqual(data['no_hp'], '089876543210')
+        self.assertEqual(data['deskripsi'], 'Deskripsi baru')
+        
+        # Verifikasi di database
+        user = User.objects.get(id=self.user.id)
+        self.assertEqual(user.first_name, 'Jane')
+        self.assertEqual(user.email, 'newemail@sekolah.id')
+        self.assertEqual(user.username, 'newemail@sekolah.id')
+    
+    def test_edit_profile_duplicate_email(self):
+        payload = {"email": self.other_user.email}
+        response = self.client.patch(
+            "/profile",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Email sudah digunakan", response.json()["detail"])
+    
+    def test_edit_profile_partial_update(self):
+        payload = {"no_hp": "081122334455"}
+        response = self.client.patch(
+            "/profile",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['no_hp'], '081122334455')
+        # Field lain tetap sama
+        self.assertEqual(data['first_name'], 'John')
+        self.assertEqual(data['email'], 'user@sekolah.id')
+
+class ContentCompletionTest(TestCase):
+    def setUp(self):
+        self.client = TestClient(apiv1)
+        self.teacher = User.objects.create_user(
+            username='guru', email='guru@sekolah.id', password='password'
+        )
+        self.student = User.objects.create_user(
+            username='siswa', email='siswa@sekolah.id', password='password'
+        )
+        self.course = Course.objects.create(
+            name="Matematika", description="Aljabar", price=0, teacher=self.teacher
+        )
+        self.content1 = CourseContent.objects.create(
+            name="Konten 1", description="Deskripsi", course_id=self.course
+        )
+        self.content2 = CourseContent.objects.create(
+            name="Konten 2", description="Deskripsi", course_id=self.course
+        )
+        
+        # Enroll student
+        CourseMember.objects.create(
+            course_id=self.course, user_id=self.student, roles='std'
+        )
+        
+        # Token untuk student
+        token_res = self.client.post(
+            "/api/auth/token/pair",
+            json={"username": "siswa", "password": "password"}
+        )
+        self.student_token = token_res.json()["access"]
+    
+    def test_mark_content_complete_success(self):
+        response = self.client.post(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ContentCompletion.objects.filter(user=self.student, content=self.content1).exists())
+    
+    def test_mark_content_complete_duplicate(self):
+        # Tandai pertama kali
+        self.client.post(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        # Tandai kedua kali
+        response = self.client.post(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("sudah menyelesaikan", response.json()["detail"])
+    
+    def test_mark_content_complete_not_member(self):
+        # Buat user lain yang bukan member
+        other_user = User.objects.create_user(
+            username='other', email='other@sekolah.id', password='password'
+        )
+        token_res = self.client.post(
+            "/api/auth/token/pair",
+            json={"username": "other", "password": "password"}
+        )
+        other_token = token_res.json()["access"]
+        
+        response = self.client.post(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {other_token}"}
+        )
+        self.assertEqual(response.status_code, 403)
+    
+    def test_get_content_completions(self):
+        # Tandai dua konten sebagai selesai
+        ContentCompletion.objects.create(user=self.student, content=self.content1)
+        ContentCompletion.objects.create(user=self.student, content=self.content2)
+        
+        response = self.client.get(
+            f"/courses/{self.course.id}/completions",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 2)
+        content_ids = [c['id'] for c in data]
+        self.assertIn(self.content1.id, content_ids)
+        self.assertIn(self.content2.id, content_ids)
+    
+    def test_get_content_completions_pagination(self):
+        # Buat 15 konten
+        contents = []
+        for i in range(15):
+            content = CourseContent.objects.create(
+                name=f"Konten {i}", 
+                description="Deskripsi", 
+                course_id=self.course
+            )
+            contents.append(content)
+            ContentCompletion.objects.create(user=self.student, content=content)
+        
+        # Request halaman 1
+        response = self.client.get(
+            f"/courses/{self.course.id}/completions?page=1",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 10)  # Default page size
+        
+        # Request halaman 2
+        response = self.client.get(
+            f"/courses/{self.course.id}/completions?page=2",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 5)
+    
+    def test_unmark_content_complete_success(self):
+        # Tandai dulu
+        ContentCompletion.objects.create(user=self.student, content=self.content1)
+        
+        response = self.client.delete(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ContentCompletion.objects.filter(user=self.student, content=self.content1).exists())
+    
+    def test_unmark_content_complete_not_found(self):
+        # Tidak ada completion
+        response = self.client.delete(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 404)
+    
+    def test_unmark_content_complete_other_user(self):
+        # Buat user lain
+        other_user = User.objects.create_user(
+            username='other', email='other@sekolah.id', password='password'
+        )
+        # Buat completion oleh user lain
+        ContentCompletion.objects.create(user=other_user, content=self.content1)
+        
+        # Student mencoba hapus completion milik orang lain
+        response = self.client.delete(
+            f"/contents/{self.content1.id}/complete",
+            headers={"Authorization": f"Bearer {self.student_token}"}
+        )
+        self.assertEqual(response.status_code, 404)

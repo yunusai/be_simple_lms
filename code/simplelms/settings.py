@@ -54,7 +54,9 @@ ROOT_URLCONF = 'simplelms.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [
+            BASE_DIR / 'templates',
+        ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -99,11 +101,20 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    ]
+
+AUTH_USER_MODEL = 'lms_core.User'
+
 RATE_LIMITS = {
     'REGISTER': '5/hour',
     'ENROLL_BATCH': '10/hour',
     'MODERATION': '15/minute',
+    'CERTIFICATE': '15/minute',
+    'COURSE_CREATION': '10/hour',
 }
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.1/topics/i18n/

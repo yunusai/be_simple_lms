@@ -1,5 +1,39 @@
 from django.db import models
-from django.contrib.auth.models import User
+from django.contrib.auth.models import AbstractUser
+# from django.contrib.auth.models import User
+# from django.contrib.auth import get_user_model
+
+# User = get_user_model()
+
+class User(AbstractUser):
+    tempat_lahir = models.CharField(max_length=100, blank=True, null=True)
+    tanggal_lahir = models.DateField(blank=True, null=True)
+    alamat = models.TextField(blank=True, null=True)
+    no_hp = models.CharField(max_length=20, blank=True, null=True)
+    deskripsi = models.TextField("Deskripsi", blank=True, null=True)
+    last_login = models.DateTimeField(null=True, blank=True)
+    foto_profil = models.ImageField(
+        "Foto Profil", 
+        upload_to="profile_pics/", 
+        blank=True, 
+        null=True
+    )
+    
+    # Tambahkan related_name untuk menghindari konflik
+    groups = models.ManyToManyField(
+        'auth.Group',
+        verbose_name='groups',
+        blank=True,
+        related_name="custom_user_set",
+        related_query_name="user",
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        verbose_name='user permissions',
+        blank=True,
+        related_name="custom_user_set",
+        related_query_name="user",
+    )
 
 # Create your models here.
 class Course(models.Model):
