@@ -14,6 +14,7 @@ class RegisterTest(TestCase):
     def setUp(self):
         self.client = TestClient(apiv1)
         self.payload = {
+            "username": "testtest",
             "email": "test@example.com",
             "password": "securepassword123",
             "first_name": "Test",

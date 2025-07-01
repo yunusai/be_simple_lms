@@ -89,6 +89,7 @@ class CommentModerationIn(Schema):
     approved: bool
 
 class UserRegisterIn(Schema):
+    username: str
     email: EmailStr
     password: str
     first_name: str

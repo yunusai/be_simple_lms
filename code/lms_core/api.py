@@ -77,7 +77,7 @@ def register(request, payload: UserRegisterIn):
         return 400, {"message": "Email sudah terdaftar"}
     try:
         user = User.objects.create_user(
-            username=payload.email,
+            username=payload.username,
             email=payload.email,
             password=payload.password,
             first_name=payload.first_name,
