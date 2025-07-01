@@ -1,5 +1,5 @@
 from ninja import NinjaAPI, UploadedFile, File, Form
-from ninja.errors import ValidationError
+from ninja.errors import ValidationError, HttpError
 from ninja.pagination import paginate, PageNumberPagination
 from ninja.responses import Response
 from ninja_simple_jwt.auth.views.api import mobile_auth_router, web_auth_router
@@ -149,7 +149,7 @@ def enroll_student_batch(request, payload: EnrollStudentBatch):
     }
     
 # COMMENTS
-@apiv1.post("/comments", auth=apiAuth, response={201: CourseCommentOut, 403: dict}, tags=['Comments'])
+@apiv1.post("/comments/{content_id}", auth=apiAuth, response={201: CourseCommentOut, 403: dict}, tags=['Comments'])
 def create_comment(request, payload: CourseCommentIn, content_id: int):
     content = get_object_or_404(CourseContent, id=content_id)
     if content.scheduled_release and content.scheduled_release > timezone.now():
@@ -162,7 +162,7 @@ def create_comment(request, payload: CourseCommentIn, content_id: int):
     comment = Comment.objects.create(
         content_id=content,
         member_id=member,
-        text=payload.text,
+        comment=payload.comment,
         approved=False  # default belum diapprove
     )
     return 201, CourseCommentOut.from_orm(comment)
@@ -460,14 +460,11 @@ def mark_content_complete(request, content_id: int):
 def get_content_completions(request, course_id: int, **kwargs):
     course = get_object_or_404(Course, id=course_id)
     user = request.auth
-    
+
     # Cek apakah user adalah member course
     if not CourseMember.objects.filter(course_id=course, user_id=user, roles='std').exists():
-        return Response(
-            {"detail": "Anda tidak terdaftar di kursus ini"},
-            status=HTTPStatus.FORBIDDEN
-        )
-    
+        raise HttpError(403, "Anda tidak terdaftar di kursus ini")
+
     # Dapatkan konten yang sudah diselesaikan oleh user di course ini
     completed_contents = CourseContent.objects.filter(
         course_id=course,

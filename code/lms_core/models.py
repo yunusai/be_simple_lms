@@ -2,7 +2,6 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 # from django.contrib.auth.models import User
 # from django.contrib.auth import get_user_model
-
 # User = get_user_model()
 
 class User(AbstractUser):
@@ -87,6 +86,11 @@ class CourseContent(models.Model):
                                 on_delete=models.RESTRICT, null=True, blank=True)
     scheduled_release = models.DateTimeField(
         "Jadwal Rilis", 
+        null=True, 
+        blank=True, 
+    )
+    scheduled_close = models.DateTimeField(
+        "Jadwal Tutup", 
         null=True, 
         blank=True, 
     )
