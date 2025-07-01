@@ -1,7 +1,5 @@
 from django.test import TestCase
 from django.urls import reverse
-# from django.contrib.auth.models import User
-from lms_core.utils import calculate_discount, validate_password, calculator
 from ninja_extra.testing import TestAsyncClient
 from ninja.testing import TestClient
 from lms_core.models import Course, CourseMember, CourseContent, Comment
